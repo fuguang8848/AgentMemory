@@ -1,5 +1,9 @@
 __pycache__/
 *.pyc
 *.pyo
+src/__pycache__/
+src/data/vectors.json
 src/data/graph_store.json
 src/data/archive/
+memory/memory/
+memory/memory/*.md

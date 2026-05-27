@@ -17,12 +17,30 @@ import asyncio
 from datetime import datetime
 from typing import Optional
 
-from .config import get_config, Config
-from .L1_lcm_compressor import LCMCompressor, FactType
-from .L2_graph_store import GraphStore
-from .L3_vector_store import VectorStore, HybridRetriever
-from .L4_file_persist import FilePersistStore
-from .decay_engine import DecayEngine, MemoryArchiver
+try:
+    from .config import get_config, Config
+except ImportError:
+    from config import get_config, Config
+try:
+    from .L1_lcm_compressor import LCMCompressor, FactType
+except ImportError:
+    from L1_lcm_compressor import LCMCompressor, FactType
+try:
+    from .L2_graph_store import GraphStore
+except ImportError:
+    from L2_graph_store import GraphStore
+try:
+    from .L3_vector_store import VectorStore, HybridRetriever
+except ImportError:
+    from L3_vector_store import VectorStore, HybridRetriever
+try:
+    from .L4_file_persist import FilePersistStore
+except ImportError:
+    from L4_file_persist import FilePersistStore
+try:
+    from .decay_engine import DecayEngine, MemoryArchiver
+except ImportError:
+    from decay_engine import DecayEngine, MemoryArchiver
 
 
 class MemoryHermes:
@@ -52,34 +70,54 @@ class MemoryHermes:
         """初始化所有层"""
         # L1: LCM 压缩层
         if self.config.get("layers.l1_compress", True):
-            self.l1 = LCMCompressor(self.config)
+            # 构建百炼配置字典
+            bailian_cfg = {
+                "api_key": self.config.get_api_key("BAILIAN_API_KEY"),
+                "base_url": self.config.get("llm.base_url"),
+                "model": self.config.get("llm.model"),
+                "embedding_model": self.config.get("embedding.model"),
+            }
+            self.l1 = LCMCompressor(bailian_cfg)
         else:
             self.l1 = None
         
         # L2: Graph 图谱层
         if self.config.get("layers.l2_graph", True):
-            self.graph = GraphStore(self.config)
+            graph_path = self.config.get_storage_path("graph_store.json")
+            self.graph = GraphStore(graph_path)
         else:
             self.graph = None
         
         # L3: Vector 混合检索层
         if self.config.get("layers.l3_vector", True):
-            self.vector = VectorStore(self.config)
-            self.retriever = HybridRetriever(self.vector, self.config)
+            vector_path = self.config.get_storage_path("vectors.json")
+            self.vector = VectorStore(
+                storage_path=vector_path,
+                embedding_model=self.config.get("embedding.model"),
+                embedding_dims=self.config.get("embedding.dimensions"),
+            )
+            self.retriever = HybridRetriever(self.vector)
         else:
             self.vector = None
             self.retriever = None
         
         # L4: File 持久化层
         if self.config.get("layers.l4_files", True):
-            self.files = FilePersistStore(self.config)
+            workspace = self.config.config.get("storage", {}).get("memory_dir", "memory")
+            self.files = FilePersistStore(workspace)
         else:
             self.files = None
         
         # 遗忘引擎
         if self.config.get("decay.enabled", True):
-            self.decay = DecayEngine(self.config)
-            self.archiver = MemoryArchiver(self.config)
+            self.decay = DecayEngine(
+                half_life_days=self.config.get("decay.half_life_days", 14.0),
+                forget_threshold=self.config.get("decay.threshold", 0.3),
+                archive_threshold=self.config.get("decay.archive_threshold", 0.5),
+            )
+            self.archiver = MemoryArchiver(
+                max_archived=self.config.get("decay.max_archive_size", 1000),
+            )
         else:
             self.decay = None
             self.archiver = None
@@ -104,18 +142,15 @@ class MemoryHermes:
         metadata["importance"] = importance
         metadata["stored_at"] = datetime.now().isoformat()
         
-        # L1: 提取事实（如果启用）
-        extracted_entities = []
-        if self.l1:
-            facts = await self.l1.extract_facts([content])
-            for fact in facts:
-                metadata["entities"] = fact.entities
-                metadata["fact_type"] = fact.fact_type.value if hasattr(fact.fact_type, "value") else str(fact.fact_type)
-                
-                # L2: 写入图谱
-                if self.graph and fact.entities:
-                    for entity_name in fact.entities:
-                        self._graph_add_entity(entity_name, metadata)
+        # L1: 提取实体（轻量解析，无需 LLM API）
+        # 对于已结构化的事实，直接从 content 和 metadata 中提取 entities
+        entities = metadata.get("entities", [])
+        fact_type = metadata.get("fact_type", "general")
+        
+        # 如果提供了 entities 列表，写入图谱
+        if self.graph and entities:
+            for entity_name in entities:
+                self._graph_add_entity(entity_name, metadata)
         
         # L3: 写入向量存储
         memory_id = None
@@ -148,7 +183,7 @@ class MemoryHermes:
         
         # L4: 补充文件层搜索
         if self.files and len(results) < limit:
-            file_results = self.files.search(query)
+            file_results = self.files.search(query) if hasattr(self.files, 'search') else []
             for fr in file_results:
                 if not any(r["id"] == fr.get("id") for r in results):
                     results.append(fr)
@@ -231,7 +266,8 @@ class MemoryHermes:
         
         # LLM 提取事实
         conversation = [user_message, assistant_message]
-        facts = await self.l1.extract_facts(conversation)
+        extractor = self.l1._get_extractor()
+        facts = await extractor.extract_facts(conversation)
         
         stored = []
         for fact in facts:
@@ -344,8 +380,10 @@ class MemoryHermes:
             stats["graph"] = self.graph.get_entity_count()
         
         if self.archiver:
+            archived_list = self.archiver.list_archived()
             stats["archive"] = {
-                "size": self.archiver.get_archive_size()
+                "count": len(archived_list),
+                "entries": archived_list[:10]  # 最近10条
             }
         
         return stats
@@ -356,14 +394,21 @@ class MemoryHermes:
             return
         
         # 简单实现，实际应该分析实体类型
-        entity_type = "ENTITY"
-        if "project" in metadata.get("fact_type", "").lower():
-            entity_type = "PROJECT"
-        elif "person" in metadata.get("fact_type", "").lower():
-            entity_type = "PERSON"
+        from .L2_graph_store import Entity, EntityType
+        entity_type = EntityType.CONCEPT
+        fact_type = metadata.get("fact_type", "").lower()
+        if "project" in fact_type:
+            entity_type = EntityType.PROJECT
+        elif "person" in fact_type:
+            entity_type = EntityType.PERSON
+        elif "location" in fact_type or "place" in fact_type:
+            entity_type = EntityType.LOCATION
+        elif "org" in fact_type or "team" in fact_type:
+            entity_type = EntityType.ORGANIZATION
         
         try:
-            self.graph.add_entity(name, entity_type, properties=metadata)
+            entity = Entity(name=name, entity_type=entity_type, properties=metadata)
+            self.graph.add_entity(entity)
         except Exception:
             pass  # 忽略重复实体
     

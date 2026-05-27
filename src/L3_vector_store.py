@@ -414,6 +414,20 @@ class VectorStore:
         self._save()
         return True
 
+    def get_all_entries(self) -> list[dict]:
+        """获取所有记忆条目"""
+        return [
+            {
+                "id": eid,
+                "content": e.content,
+                "importance": e.importance,
+                "access_count": e.access_count,
+                "created_at": e.created_at,
+                "last_accessed": e.last_accessed,
+            }
+            for eid, e in self.entries.items()
+        ]
+
     def get_stats(self) -> dict:
         """获取统计信息"""
         entries_list = list(self.entries.values())

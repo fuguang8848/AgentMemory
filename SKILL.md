@@ -53,21 +53,21 @@ session_end → on_session_end() 关键决策总结
 ## 标准接口
 
 ```python
-from skills.memory_hermes import MemoryHermes
+from src.memory_manager import MemoryHermes
 
 mh = MemoryHermes()
 
 # 存储记忆（自动 LLM 提取）
-mh.store("用户说石榴籽项目省赛过了", metadata={"project": "石榴籽"})
+await mh.store("用户说石榴籽项目省赛过了", metadata={"project": "石榴籽"})
 
 # 查询记忆
-results = mh.query("石榴籽项目进展")
+results = await mh.query("石榴籽项目进展")
 
 # 预取（后台）
-mh.prefetch("优优的项目状态")
+await mh.prefetch("优优的项目状态")
 
 # 遗忘
-mh.forget(memory_id="mem_xxx")
+await mh.forget(memory_id="mem_xxx")
 ```
 
 ## 配置
