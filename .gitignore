@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+*.pyo
+src/data/graph_store.json
+src/data/archive/
