@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentmemory"
+version = "1.0.0"
+description = "四层闭环记忆系统 - 多 provider 自适应, pip install 后 import 即可用, 不绑死任何 LLM/Embedding API"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "楚灵", email = "chuling@agentteam.dev" }]
+keywords = ["memory", "agent", "hermes", "mem0", "vector-store", "knowledge-base"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "httpx>=0.25.0",
+    "aiofiles>=23.0.0",
+    "mcp>=1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/YintaTriss/AgentMemory"
+Repository = "https://github.com/YintaTriss/AgentMemory"
+
+[project.scripts]
+agentmemory = "agentmemory.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["agentmemory*"]
+exclude = ["tests*"]
