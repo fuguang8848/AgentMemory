@@ -61,7 +61,9 @@ class MiniLMEmbedder(Embedder):
         normalize: bool = True,
         **kwargs
     ):
-        self.model_name = model_name or self.MODEL_NAME
+        # V 6/18 10:50 fix: 原本 `self.model_name = ...` 调 base Embedder.model_name property (无 setter) → AttributeError
+        # 改用 _model_name 私有 attr, property 返它 (避免递归)
+        self._model_name = model_name or self.MODEL_NAME
         self.device = device or "cpu"
         self.normalize = normalize
         self.extra_kwargs = kwargs
@@ -76,7 +78,7 @@ class MiniLMEmbedder(Embedder):
                 raise ImportError(
                     "sentence-transformers required: pip install sentence-transformers"
                 )
-            self._model = SentenceTransformer(self.model_name, device=self.device, **self.extra_kwargs)
+            self._model = SentenceTransformer(self._model_name, device=self.device, **self.extra_kwargs)
         return self._model
 
     @property
@@ -85,7 +87,7 @@ class MiniLMEmbedder(Embedder):
 
     @property
     def model_name(self) -> str:
-        return self.model_name
+        return self._model_name
 
     async def embed(self, texts: str | list[str], **kwargs) -> list[list[float]]:
         """Generate embeddings using MiniLM - async.
