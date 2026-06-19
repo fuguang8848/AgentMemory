@@ -1,1 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# 备份 (SOP #32 7 天清, *.bak-pre-* 通配)
+*.bak
+*.bak-pre-*
+**/*.bak
+**/*.bak-pre-*
+
+# 数据库 (V 6/18 19:56 加, 浮光 9fb2a55 保留)
 *.db
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
