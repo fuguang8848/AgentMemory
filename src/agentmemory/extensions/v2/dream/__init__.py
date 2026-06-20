@@ -38,6 +38,7 @@ from .self_evolver import SelfEvolver, EvolutionRule
 from .health_monitor import HealthMonitor, HealthReport
 from .lucid_generator import LucidDreamGenerator, LucidDream, Inspiration
 from .minimax_client import MiniMaxClient, create_minimax_client
+from .multi_model_bridge import MultiModelMemoryBridge, ModelIdentity, MemorySlice
 
 __all__ = [
     # 核心
@@ -67,6 +68,10 @@ __all__ = [
     # MiniMax
     "MiniMaxClient",
     "create_minimax_client",
+    # 跨模型记忆
+    "MultiModelMemoryBridge",
+    "ModelIdentity",
+    "MemorySlice",
 ]
 
 __version__ = "1.0.0"

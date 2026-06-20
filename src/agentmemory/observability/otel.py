@@ -31,6 +31,8 @@ except ImportError:
     OTEL_AVAILABLE = False
     trace = None
     metrics = None
+    Status = None
+    StatusCode = None
 
 
 # ============================================================================
@@ -474,4 +476,354 @@ __all__ = [
     "TelemetryConfig",
     "get_telemetry",
     "trace_span",
+    "AgentEvaluator",
+    "OTelExporter",
 ]
+
+
+# ============================================================================
+# AgentEvaluator — RagaAI-compatible agent evaluation
+# ============================================================================
+
+
+@dataclass
+class EvaluationResult:
+    """Result of an agent evaluation."""
+    metric: str
+    score: float
+    details: dict[str, Any] = field(default_factory=dict)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass
+class AgentProfile:
+    """Agent execution profile."""
+    agent_name: str
+    total_calls: int = 0
+    total_duration: float = 0.0
+    memory_usage_samples: list[float] = field(default_factory=list)
+    error_count: int = 0
+    evaluation_results: list[EvaluationResult] = field(default_factory=list)
+
+    @property
+    def avg_duration(self) -> float:
+        return self.total_duration / self.total_calls if self.total_calls else 0.0
+
+    @property
+    def avg_memory_mb(self) -> float:
+        return sum(self.memory_usage_samples) / len(self.memory_usage_samples) if self.memory_usage_samples else 0.0
+
+
+class AgentEvaluator:
+    """
+    RagaAI-compatible agent evaluator.
+
+    Provides:
+    - evaluate_response(): score agent responses
+    - track_memory_usage(): track memory consumption
+    - profile_agent(): aggregate execution profiling
+
+    Usage:
+        evaluator = AgentEvaluator()
+        result = await evaluator.evaluate_response(
+            agent_name="search_agent",
+            prompt="Find documents about AI",
+            response="Found 5 documents...",
+            expected_outcome="Returns relevant documents",
+        )
+        print(result.score, result.metric)
+    """
+
+    def __init__(self, telemetry: OTelTelemetry | None = None):
+        self._telemetry = telemetry
+        self._profiles: dict[str, AgentProfile] = {}
+        self._memory_lock = asyncio.Lock()
+
+    # --------------------------------------------------------------------------
+    # evaluate_response
+    # --------------------------------------------------------------------------
+
+    async def evaluate_response(
+        self,
+        agent_name: str,
+        prompt: str,
+        response: str,
+        expected_outcome: str | None = None,
+        metrics: list[str] | None = None,
+    ) -> list[EvaluationResult]:
+        """
+        Evaluate an agent response against multiple metrics.
+
+        Args:
+            agent_name: Name of the agent
+            prompt: Input prompt
+            response: Agent's response
+            expected_outcome: Optional expected outcome for comparison
+            metrics: List of metrics to evaluate (defaults to ["relevance", "coherence", "correctness"])
+
+        Returns:
+            List of EvaluationResult objects
+        """
+        results: list[EvaluationResult] = []
+        default_metrics = ["relevance", "coherence", "correctness"]
+        eval_metrics = metrics or default_metrics
+
+        for metric in eval_metrics:
+            score = await self._compute_metric(metric, prompt, response, expected_outcome)
+            result = EvaluationResult(
+                metric=metric,
+                score=score,
+                details={
+                    "agent_name": agent_name,
+                    "prompt_length": len(prompt),
+                    "response_length": len(response),
+                },
+            )
+            results.append(result)
+
+            # Update profile
+            await self._update_profile(agent_name, "evaluation", {"metric": metric, "score": score})
+
+        return results
+
+    async def _update_profile(
+        self, agent_name: str, event_type: str, data: dict[str, Any]
+    ) -> None:
+        """Update agent profile with an event."""
+        async with self._memory_lock:
+            if agent_name not in self._profiles:
+                self._profiles[agent_name] = AgentProfile(agent_name=agent_name)
+            # Evaluation results are tracked separately; no-op here
+            _ = event_type, data
+
+    async def _compute_metric(
+        self,
+        metric: str,
+        prompt: str,
+        response: str,
+        expected_outcome: str | None,
+    ) -> float:
+        """Compute a single metric score (placeholder — plug in LLM judge or heuristics)."""
+        # Simple heuristic fallback when no LLM judge is configured
+        # Returns a dummy score for demonstration; replace with real evaluation logic
+        if metric == "relevance":
+            # Rough heuristic: check response length relative to prompt
+            ratio = len(response) / max(len(prompt), 1)
+            return min(1.0, ratio / 2)
+        elif metric == "coherence":
+            # Placeholder: coherence score
+            return 0.75
+        elif metric == "correctness":
+            # Placeholder: correctness score
+            return 0.80
+        return 0.5
+
+    # --------------------------------------------------------------------------
+    # track_memory_usage
+    # --------------------------------------------------------------------------
+
+    async def track_memory_usage(self, agent_name: str, memory_mb: float) -> None:
+        """
+        Record a memory usage sample for an agent.
+
+        Args:
+            agent_name: Name of the agent
+            memory_mb: Memory usage in megabytes
+        """
+        async with self._memory_lock:
+            if agent_name not in self._profiles:
+                self._profiles[agent_name] = AgentProfile(agent_name=agent_name)
+            self._profiles[agent_name].memory_usage_samples.append(memory_mb)
+
+            # Emit to OTel metrics if available
+            if OTEL_AVAILABLE:
+                self._record_memory_metric(agent_name, memory_mb)
+
+    def _record_memory_metric(self, agent_name: str, memory_mb: float) -> None:
+        """Record memory metric to OTel."""
+        telemetry = self._telemetry or get_telemetry()
+        if telemetry._meter:
+            gauge = telemetry._meter.create_histogram(
+                name="agent_memory_mb",
+                description="Agent memory usage in MB",
+                unit="MB",
+            )
+            gauge.record(memory_mb, {"agent.name": agent_name})
+
+    # --------------------------------------------------------------------------
+    # profile_agent
+    # --------------------------------------------------------------------------
+
+    async def profile_agent(
+        self,
+        agent_name: str,
+        duration: float,
+        success: bool = True,
+        error: str | None = None,
+    ) -> AgentProfile:
+        """
+        Record an agent execution profile.
+
+        Args:
+            agent_name: Name of the agent
+            duration: Execution duration in seconds
+            success: Whether execution succeeded
+            error: Optional error message
+
+        Returns:
+            Updated AgentProfile
+        """
+        async with self._memory_lock:
+            if agent_name not in self._profiles:
+                self._profiles[agent_name] = AgentProfile(agent_name=agent_name)
+
+            profile = self._profiles[agent_name]
+            profile.total_calls += 1
+            profile.total_duration += duration
+            if not success:
+                profile.error_count += 1
+
+            # Emit to OTel tracing if available
+            if OTEL_AVAILABLE and self._telemetry:
+                span_name = f"agent.profile.{agent_name}"
+                async with self._telemetry.start_span(span_name) as span:
+                    if span:
+                        span.set_attribute("agent.name", agent_name)
+                        span.set_attribute("agent.duration_s", duration)
+                        span.set_attribute("agent.success", success)
+                        if error:
+                            span.set_attribute("agent.error", error)
+                            span.set_status(Status(StatusCode.ERROR, error))
+
+        return self._profiles[agent_name]
+
+    def get_profile(self, agent_name: str) -> AgentProfile | None:
+        """Get the profile for an agent."""
+        return self._profiles.get(agent_name)
+
+    def get_all_profiles(self) -> dict[str, AgentProfile]:
+        """Get all agent profiles."""
+        return dict(self._profiles)
+
+
+# ============================================================================
+# OTelExporter — export AgentMemory telemetry to OTLP / console
+# ============================================================================
+
+
+class OTelExporter:
+    """
+    Export AgentMemory observability data to OTLP endpoints or console.
+
+    Provides:
+    - export_to_otel_endpoint(): push traces/metrics to OTLP
+    - export_to_console(): print structured telemetry to stdout
+
+    Usage:
+        exporter = OTelExporter(
+            service_name="agentmemory",
+            otlp_endpoint="http://localhost:4317",
+        )
+        await exporter.export_to_otel_endpoint(telemetry)
+        await exporter.export_to_console(evaluation_results)
+    """
+
+    def __init__(
+        self,
+        service_name: str = "agentmemory",
+        otlp_endpoint: str | None = None,
+    ):
+        self._service_name = service_name
+        self._otlp_endpoint = otlp_endpoint
+        self._telemetry = get_telemetry(
+            TelemetryConfig(
+                service_name=service_name,
+                otlp_endpoint=otlp_endpoint,
+            )
+        )
+
+    # --------------------------------------------------------------------------
+    # export_to_otel_endpoint
+    # --------------------------------------------------------------------------
+
+    async def export_to_otel_endpoint(
+        self,
+        data: dict[str, Any] | list[Any] | None = None,
+    ) -> bool:
+        """
+        Export telemetry data to the configured OTLP endpoint.
+
+        Args:
+            data: Optional data payload to export as a span event
+
+        Returns:
+            True if export succeeded, False otherwise
+        """
+        if not OTEL_AVAILABLE:
+            import logging
+            logging.getLogger(__name__).warning("OTel unavailable — skipping OTLP export")
+            return False
+
+        try:
+            async with self._telemetry.start_span("otel.export") as span:
+                if span and data is not None:
+                    span.set_attribute("export.service_name", self._service_name)
+                    span.set_attribute("export.otlp_endpoint", self._otlp_endpoint or "none")
+                    span.set_attribute("export.payload", str(data)[:500])
+
+                # Flush tracer provider to push any pending spans
+                if self._telemetry._tracer_provider:
+                    if hasattr(self._telemetry._tracer_provider, "force_flush"):
+                        self._telemetry._tracer_provider.force_flush()
+
+                if span:
+                    span.set_attribute("export.success", True)
+                return True
+
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"OTLP export failed: {e}")
+            return False
+
+    # --------------------------------------------------------------------------
+    # export_to_console
+    # --------------------------------------------------------------------------
+
+    async def export_to_console(
+        self,
+        data: dict[str, Any] | list[EvaluationResult] | TelemetryConfig | None = None,
+        title: str | None = None,
+    ) -> None:
+        """
+        Print structured telemetry data to the console.
+
+        Args:
+            data: Data to export (EvaluationResult list, dict, or TelemetryConfig)
+            title: Optional section title
+        """
+        ts = datetime.now(timezone.utc).isoformat()
+
+        print(f"\n{'=' * 60}")
+        if title:
+            print(f"  {title}")
+        print(f"  Timestamp: {ts}")
+        print(f"  Service: {self._service_name}")
+        print('=' * 60)
+
+        if data is None:
+            print("  (no data)")
+        elif isinstance(data, list) and data and isinstance(data[0], EvaluationResult):
+            for r in data:
+                print(f"  [{r.metric}] score={r.score:.3f}  details={r.details}")
+        elif isinstance(data, dict):
+            for key, value in data.items():
+                print(f"  {key}: {value}")
+        elif isinstance(data, TelemetryConfig):
+            print(f"  service_name: {data.service_name}")
+            print(f"  otlp_endpoint: {data.otlp_endpoint}")
+            print(f"  enable_tracing: {data.enable_tracing}")
+            print(f"  enable_metrics: {data.enable_metrics}")
+        else:
+            print(f"  {data}")
+
+        print('-' * 60 + '\n')
