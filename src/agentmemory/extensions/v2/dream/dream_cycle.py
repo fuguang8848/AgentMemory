@@ -28,6 +28,7 @@ from .forgetting_curve import ForgettingCurve
 from .knowledge_graphger import KnowledgeGrapher, NodeType, EdgeType
 from .self_evolver import SelfEvolver
 from .health_monitor import HealthMonitor, HealthReport
+from .lucid_generator import LucidDreamGenerator, LucidDream, Inspiration
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,8 @@ class DreamResult:
     entries_consolidated: int = 0
     entries_archived: int = 0
     entries_processed: int = 0
+    lucid_dreams_generated: int = 0
+    lucid_inspirations_count: int = 0
     insights: list[str] = field(default_factory=list)
     health_report: Optional[HealthReport] = None
     graph_stats: dict = field(default_factory=dict)
@@ -53,8 +56,10 @@ class DreamResult:
             f"  收集: {self.entries_collected} | "
             f"整合: {self.entries_consolidated} | "
             f"归档: {self.entries_archived}\n"
-            f"  洞察: {len(self.insights)} | "
-            f"健康: {self.health_report.grade if self.health_report else 'N/A'}"
+            f"  清醒梦: {self.lucid_dreams_generated} | "
+            f"灵感: {self.lucid_inspirations_count} | "
+            f"洞察: {len(self.insights)}\n"
+            f"  健康: {self.health_report.grade if self.health_report else 'N/A'}"
         )
 
 
@@ -101,6 +106,7 @@ class DreamNet:
         grapher: Optional[KnowledgeGrapher] = None,
         evolver: Optional[SelfEvolver] = None,
         monitor: Optional[HealthMonitor] = None,
+        lucid: Optional[LucidDreamGenerator] = None,
     ):
         self.workspace_dir = Path(workspace_dir).expanduser()
         self.memory_dir = Path(memory_dir).expanduser()
@@ -111,6 +117,7 @@ class DreamNet:
         self.grapher = grapher or KnowledgeGrapher(str(self.memory_dir / "graph"))
         self.evolver = evolver or SelfEvolver(str(self.memory_dir / "evolver"))
         self.monitor = monitor or HealthMonitor()
+        self.lucid = lucid or LucidDreamGenerator(str(self.memory_dir))
 
         self.grapher.load()
 
@@ -135,6 +142,14 @@ class DreamNet:
 
             result.phase = "evaluate"
             self._evaluate_phase(result)
+
+            # ── Phase 4: Lucid Dreams（清醒梦生成）─
+            result.phase = "lucidity"
+            lucid_dreams = self.lucid.generate(graph_stats=self.grapher.stats())
+            result.lucid_dreams_generated = len(lucid_dreams)
+            inspirations = self.lucid.get_unread_inspirations()
+            result.lucid_inspirations_count = len(inspirations)
+            logger.info(f"  [Lucid] 生成了 {len(lucid_dreams)} 个清醒梦，{len(inspirations)} 条灵感待推送")
 
             result.insights = self.evolver.generate_insights(
                 health_report={
