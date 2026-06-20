@@ -36,6 +36,8 @@ from .knowledge_graphger import KnowledgeGrapher, MemoryNode, MemoryEdge
 from .sleep_scheduler import SleepScheduler
 from .self_evolver import SelfEvolver, EvolutionRule
 from .health_monitor import HealthMonitor, HealthReport
+from .lucid_generator import LucidDreamGenerator, LucidDream, Inspiration
+from .minimax_client import MiniMaxClient, create_minimax_client
 
 __all__ = [
     # 核心
@@ -58,6 +60,13 @@ __all__ = [
     # 健康
     "HealthMonitor",
     "HealthReport",
+    # 清醒梦
+    "LucidDreamGenerator",
+    "LucidDream",
+    "Inspiration",
+    # MiniMax
+    "MiniMaxClient",
+    "create_minimax_client",
 ]
 
 __version__ = "1.0.0"

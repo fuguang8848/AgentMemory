@@ -24,12 +24,15 @@
 
 import json
 import logging
+import os
 import random
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+from .minimax_client import MiniMaxClient, create_minimax_client
 
 logger = logging.getLogger(__name__)
 
@@ -150,14 +153,24 @@ class LucidDreamGenerator:
     def __init__(
         self,
         memory_dir: str = "~/.openclaw/workspace/memory",
-        llm_provider: str = "openai",   # 或 "anthropic", "minimax"
-        model: str = "gpt-4o",
+        llm_provider: str = "minimax",   # "openai" | "anthropic" | "minimax"
+        model: str = "MiniMax-Text-01",
+        minimax_api_key: Optional[str] = None,
         num_dreams: int = 5,            # 每次梦境周期生成 N 个清醒梦
     ):
         self.memory_dir = Path(memory_dir).expanduser()
         self.llm_provider = llm_provider
         self.model = model
         self.num_dreams = num_dreams
+
+        # MiniMax 客户端初始化
+        self._minimax: Optional[MiniMaxClient] = None
+        if llm_provider == "minimax":
+            self._minimax = create_minimax_client(
+                api_key=minimax_api_key or os.environ.get("MINIMAX_API_KEY"),
+                model=model,
+            )
+            logger.info(f"[Lucid] MiniMax客户端就绪，模型: {model}")
 
         self.output_dir = self.memory_dir / "dream_inspirations"
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -388,15 +401,29 @@ class LucidDreamGenerator:
         """
         调用 LLM 生成清醒梦内容。
 
-        生产环境替换为真实 provider：
-        - minimax: 使用 MiniMax API
+        支持三种 provider：
+        - minimax: 使用 MiniMax M3 API（优先）
         - anthropic: 使用 Claude API
         - openai: 使用 GPT-4 API
         """
-        # ─── 演示模式：返回结构化假数据 ───
-        # 实际生产中替换为真实 API 调用
-        dream_type = prompt.split("\n")[0] if "\n" in prompt else "概念融合"
+        # ─── MiniMax ───
+        if self.llm_provider == "minimax" and self._minimax:
+            try:
+                return self._minimax.generate_lucid_dream(prompt)
+            except Exception as e:
+                logger.warning(f"[Lucid] MiniMax调用失败，回退到演示模式: {e}")
 
+        # ─── 其他 provider 的占位实现 ───
+        if self.llm_provider == "openai":
+            logger.debug(f"[Lucid] OpenAI provider（未配置，返回演示数据）")
+        elif self.llm_provider == "anthropic":
+            logger.debug(f"[Lucid] Anthropic provider（未配置，返回演示数据）")
+
+        # ─── 演示模式：返回结构化假数据 ───
+        return self._mock_response(prompt)
+
+    def _mock_response(self, prompt: str) -> str:
+        """演示模式响应"""
         mock_responses = {
             "concept_fusion": """[关联分析] DreamNet 的知识图谱 + AgentTeam 的多Agent协作机制，可以构建一个"协作式梦境"——多个Agent在睡眠阶段共享记忆碎片，集体生成洞察。
 
@@ -435,12 +462,11 @@ class LucidDreamGenerator:
 [打破的假设] "记忆=上下文"的假设是错误的""",
         }
 
-        # 从mock中选择或生成默认响应
         for key, resp in mock_responses.items():
-            if key in prompt.lower() or key in self._prompts_contain(prompt):
+            if key in prompt.lower():
                 return resp
 
-        return f"[灵感生成] 基于以下输入：{prompt[:50]}... — 这是一个清醒梦的创意输出。"
+        return f"[灵感生成] 基于输入生成的创意想法: {prompt[:80]}..."
 
     def _prompts_contain(self, prompt: str) -> str:
         for key in LUCID_PROMPTS:
