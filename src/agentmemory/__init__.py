@@ -170,3 +170,9 @@ __all__ = [
     # Version
     "__version__",
 ]
+
+# Compatibility shim for older code (e.g. agentmemory skill executor)
+try:
+    from . import _v2_compat  # noqa: F401
+except ImportError:
+    pass

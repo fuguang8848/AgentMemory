@@ -70,7 +70,7 @@ class BM25Retriever:
                 analyzer="char_wb",  # 中英文混合: 字符 n-gram
                 ngram_range=(2, 4),  # 2-4 字符组合
                 min_df=1,
-                max_df=0.95,
+                max_df=1.0,  # changed from 0.95 (fails with single-doc corpora)
             )
             contents = [d["content"] for d in docs]
             self._tfidf_matrix = self._vectorizer.fit_transform(contents)
