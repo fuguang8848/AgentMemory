@@ -14,8 +14,10 @@ L4: Files 持久化层(记忆归档)
 
 import json
 import asyncio
+import os
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict, Any, List
+from pathlib import Path
 
 try:
     from .config import get_config, Config
@@ -42,6 +44,98 @@ try:
 except ImportError:
     from providers.embedder import get_embedder
 
+
+# ==============================================================================
+# PreferenceStore — mem0 风格的轻量偏好存储
+# ==============================================================================
+
+class PreferenceStore:
+    """
+    基于 JSON 文件的用户偏好存储器（mem0 风格）。
+
+    存储路径：~/.openclaw/workspace/memory/preferences.json
+
+    偏好结构::
+        {
+            "<user_id>": {
+                "<key>": {
+                    "value": <any>,
+                    "category": "working|episodic|long_term|procedural",
+                    "updated_at": "<iso timestamp>"
+                }
+            }
+        }
+    """
+
+    PREF_FILE = Path.home() / ".openclaw" / "workspace" / "memory" / "preferences.json"
+
+    def __init__(self, pref_file: Path = None):
+        self._pref_file = pref_file or self.PREF_FILE
+        self._ensure_dir()
+
+    def _ensure_dir(self) -> None:
+        self._pref_file.parent.mkdir(parents=True, exist_ok=True)
+        if not self._pref_file.exists():
+            self._pref_file.write_text("{}")
+
+    def _read(self) -> Dict[str, Any]:
+        try:
+            return json.loads(self._pref_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, FileNotFoundError):
+            return {}
+
+    def _write(self, data: Dict[str, Any]) -> None:
+        self._pref_file.parent.mkdir(parents=True, exist_ok=True)
+        self._pref_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def store(self, user_id: str, key: str, value: Any, category: str = "general") -> None:
+        """存储或更新用户偏好"""
+        prefs = self._read()
+        if user_id not in prefs:
+            prefs[user_id] = {}
+        prefs[user_id][key] = {
+            "value": value,
+            "category": category,
+            "updated_at": datetime.now().isoformat(),
+        }
+        self._write(prefs)
+
+    def get(self, user_id: str, key: str = None) -> Any:
+        """获取用户偏好，key=None 时返回该用户所有偏好"""
+        prefs = self._read()
+        user_prefs = prefs.get(user_id, {})
+        if key is None:
+            return user_prefs
+        return user_prefs.get(key, {}).get("value")
+
+    def get_by_category(self, user_id: str, category: str) -> Dict[str, Any]:
+        """获取指定类别的所有偏好"""
+        prefs = self._read()
+        user_prefs = prefs.get(user_id, {})
+        return {
+            k: v for k, v in user_prefs.items()
+            if v.get("category") == category
+        }
+
+    def delete(self, user_id: str, key: str = None) -> bool:
+        """删除偏好，key=None 时删除整用户偏好"""
+        prefs = self._read()
+        if key is None:
+            if user_id in prefs:
+                del prefs[user_id]
+                self._write(prefs)
+                return True
+            return False
+        if user_id in prefs and key in prefs[user_id]:
+            del prefs[user_id][key]
+            self._write(prefs)
+            return True
+        return False
+
+
+# ==============================================================================
+# MemoryHermes — 顶尖记忆系统主类
+# ==============================================================================
 
 class MemoryHermes:
     """
@@ -73,6 +167,9 @@ class MemoryHermes:
         self._prefetch_cache = {}
         self._session_turns = []
         self._session_start = datetime.now()
+
+        # 偏好存储（延迟初始化）
+        self._pref_store: Optional[PreferenceStore] = None
 
     def _init_layers(self):
         """初始化所有层(v2.0 修订版:L1/L2 已移除)"""
@@ -437,6 +534,64 @@ class MemoryHermes:
         """辅助方法：添加实体到图谱（v2.0 已移除 GraphStore，此方法为空占位）"""
         # v2.0: L2 Graph 已移除，图谱功能由 TagIndex + Library 替代
         pass
+
+    # ============================================================================
+    # mem0 风格偏好学习 API
+    # ============================================================================
+
+    @property
+    def pref_store(self) -> PreferenceStore:
+        """懒加载偏好存储器"""
+        if self._pref_store is None:
+            self._pref_store = PreferenceStore()
+        return self._pref_store
+
+    def learn_preference(self, user_id: str, key: str, value: Any, category: str = "general") -> None:
+        """
+        存储用户偏好（mem0 风格）。
+
+        Args:
+            user_id: 用户 ID
+            key: 偏好键名
+            value: 偏好值
+            category: 分类（working/episodic/long_term/procedural）
+        """
+        self.pref_store.store(user_id, key, value, category)
+
+    def get_preferences(self, user_id: str) -> Dict[str, Any]:
+        """
+        获取用户所有偏好（mem0 风格）。
+
+        Args:
+            user_id: 用户 ID
+
+        Returns:
+            {key: {value, category, updated_at}, ...}
+        """
+        return self.pref_store.get(user_id)
+
+    def query_by_type(self, memory_type: str) -> List[Dict[str, Any]]:
+        """
+        按记忆类型检索（mem0 风格）。
+
+        Args:
+            memory_type: 类型（working/episodic/long_term/procedural）
+
+        Returns:
+            该类型的所有偏好记录列表
+        """
+        # 读取所有用户的所有偏好，过滤指定类型
+        prefs = self._pref_store._read() if self._pref_store else {}
+        results = []
+        for uid, user_prefs in prefs.items():
+            for key, item in user_prefs.items():
+                if item.get("category") == memory_type:
+                    results.append({
+                        "user_id": uid,
+                        "key": key,
+                        **item,
+                    })
+        return results
 
     # ==================== 兼容旧 API ====================
 

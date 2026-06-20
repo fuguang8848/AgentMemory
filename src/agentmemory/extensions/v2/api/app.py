@@ -11,7 +11,7 @@ from pathlib import Path
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from typing import Optional
+from typing import Optional, Any
 from fastapi import FastAPI, HTTPException, status, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -101,6 +101,34 @@ class HealthResponse(BaseModel):
     """健康检查响应"""
     status: str
     version: str
+
+
+class PreferenceLearnRequest(BaseModel):
+    """学习偏好请求"""
+    user_id: str = Field(..., min_length=1, description="用户 ID")
+    key: str = Field(..., min_length=1, description="偏好键名")
+    value: Any = Field(..., description="偏好值")
+    category: str = Field(default="general", description="分类（working/episodic/long_term/procedural）")
+
+
+class PreferenceLearnResponse(BaseModel):
+    """学习偏好响应"""
+    success: bool
+    user_id: str
+    key: str
+    category: str
+
+
+class PreferenceGetResponse(BaseModel):
+    """获取偏好响应"""
+    user_id: str
+    preferences: dict
+
+
+class PreferenceQueryTypeResponse(BaseModel):
+    """按类型查询偏好响应"""
+    memory_type: str
+    results: list
 
 
 # ============================================================================
@@ -270,6 +298,63 @@ def create_app() -> FastAPI:
             )
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Decay check failed: {e}")
+
+    # -------------------------------------------------------------------------
+    # Preferences (mem0 style)
+    # -------------------------------------------------------------------------
+
+    @app.post(
+        "/v1/preferences",
+        response_model=PreferenceLearnResponse,
+        status_code=status.HTTP_201_CREATED,
+        tags=["preferences"],
+    )
+    async def learn_preference(request: PreferenceLearnRequest):
+        """存储/更新用户偏好（mem0 风格）"""
+        try:
+            mh = get_mh()
+            mh.learn_preference(
+                user_id=request.user_id,
+                key=request.key,
+                value=request.value,
+                category=request.category,
+            )
+            return PreferenceLearnResponse(
+                success=True,
+                user_id=request.user_id,
+                key=request.key,
+                category=request.category,
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Learn preference failed: {e}")
+
+    @app.get(
+        "/v1/preferences/{user_id}",
+        response_model=PreferenceGetResponse,
+        tags=["preferences"],
+    )
+    async def get_preferences(user_id: str):
+        """获取用户所有偏好"""
+        try:
+            mh = get_mh()
+            prefs = mh.get_preferences(user_id)
+            return PreferenceGetResponse(user_id=user_id, preferences=prefs)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Get preferences failed: {e}")
+
+    @app.get(
+        "/v1/preferences/type/{memory_type}",
+        response_model=PreferenceQueryTypeResponse,
+        tags=["preferences"],
+    )
+    async def query_preferences_by_type(memory_type: str):
+        """按记忆类型查询偏好"""
+        try:
+            mh = get_mh()
+            results = mh.query_by_type(memory_type)
+            return PreferenceQueryTypeResponse(memory_type=memory_type, results=results)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Query by type failed: {e}")
 
     return app
 
