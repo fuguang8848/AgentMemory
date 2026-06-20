@@ -720,6 +720,166 @@ class SearchEngine:
         options = SearchOptions(limit=limit)
         return await self.search_semantic(query, options=options)
 
+    # ============================================================================
+    # Query Expansion (SpectrAI Enhancement v0.4 §5.8)
+    # ============================================================================
+
+    async def query_expansion(
+        self,
+        query: str,
+        expansion_terms: int = 5,
+        max_query_terms: int = 10,
+        use_embeddings: bool = True,
+    ) -> list[str]:
+        """
+        Query Expansion — Expand query with related terms for better recall.
+        
+        Uses multiple strategies:
+        1. Embedding-based similarity (if use_embeddings=True)
+        2. Category-aware expansion
+        3. Tag-based expansion
+        
+        Args:
+            query: Original query string
+            expansion_terms: Number of expansion terms to generate
+            max_query_terms: Maximum total terms in expanded query
+            use_embeddings: Whether to use embedding-based expansion
+            
+        Returns:
+            List of expanded query strings (original + expanded variants)
+        """
+        expanded_queries = [query]
+        
+        # Strategy 1: Embedding-based term expansion
+        if use_embeddings:
+            try:
+                expanded_queries.extend(
+                    await self._expand_via_embeddings(query, expansion_terms)
+                )
+            except Exception as e:
+                logger.warning(f"Embedding-based expansion failed: {e}")
+        
+        # Strategy 2: Category path expansion
+        category_expansions = self._expand_via_categories(query)
+        expanded_queries.extend(category_expansions)
+        
+        # Strategy 3: Tag-based expansion
+        tag_expansions = self._expand_via_tags(query, expansion_terms)
+        expanded_queries.extend(tag_expansions)
+        
+        # Deduplicate while preserving order
+        seen = set()
+        unique_queries = []
+        for q in expanded_queries:
+            normalized = q.lower().strip()
+            if normalized not in seen:
+                seen.add(normalized)
+                unique_queries.append(q)
+        
+        return unique_queries[:max_query_terms]
+
+    async def _expand_via_embeddings(
+        self,
+        query: str,
+        num_terms: int = 5,
+    ) -> list[str]:
+        """
+        Expand query using embedding-based semantic similarity.
+        
+        Args:
+            query: Original query
+            num_terms: Number of similar terms to find
+            
+        Returns:
+            List of expanded term suggestions
+        """
+        # Search for similar memories to find related terms
+        try:
+            options = SearchOptions(limit=num_terms * 2)
+            results = await self.search_semantic(query, options=options)
+            
+            # Extract significant terms from top results
+            terms = set()
+            for entry in results[:num_terms]:
+                # Simple term extraction (in production, use NLP extraction)
+                words = entry.content.split()
+                # Filter common words
+                stopwords = {"the", "a", "an", "is", "are", "was", "were", "be", 
+                           "been", "being", "have", "has", "had", "do", "does", "did",
+                           "will", "would", "could", "should", "may", "might", "can",
+                           "this", "that", "these", "those", "in", "on", "at", "to",
+                           "for", "of", "with", "by", "from", "as", "into", "through"}
+                significant = [w for w in words if w.lower() not in stopwords and len(w) > 2]
+                terms.update(significant[:5])  # Take top 5 from each
+            
+            return list(terms)[:num_terms]
+        except Exception:
+            return []
+
+    def _expand_via_categories(self, query: str) -> list[str]:
+        """
+        Expand query using category path information.
+        
+        Args:
+            query: Original query
+            
+        Returns:
+            List of category-aware query variants
+        """
+        expanded = []
+        
+        # If query looks like a category path, expand it
+        if "/" in query:
+            parts = query.split("/")
+            # Add parent category queries
+            for i in range(1, len(parts)):
+                parent = "/".join(parts[:i])
+                expanded.append(parent)
+        
+        return expanded
+
+    def _expand_via_tags(
+        self,
+        query: str,
+        num_tags: int = 5,
+    ) -> list[str]:
+        """
+        Expand query using tag information.
+        
+        Args:
+            query: Original query
+            num_tags: Number of tags to consider
+            
+        Returns:
+            List of tag-expanded queries
+        """
+        expanded = []
+        
+        # Load tag index if available
+        if self._tag_index is not None:
+            try:
+                # Extract potential tags from query (simple word matching)
+                query_words = set(query.lower().split())
+                
+                # Find matching tags
+                matched_tags = set()
+                for word in query_words:
+                    if len(word) > 3:  # Skip short words
+                        tag_results = asyncio.get_event_loop().run_until_complete(
+                            self._tag_index.query(word)
+                        )
+                        if tag_results:
+                            matched_tags.update(tag_results[:3])
+                
+                # Create tag-expanded queries
+                for tag in list(matched_tags)[:num_tags]:
+                    expanded.append(f"{query} #{tag}")
+                    
+            except Exception as e:
+                logger.warning(f"Tag expansion failed: {e}")
+        
+        return expanded
+
 
 def create_search_engine(
     memory_dir: str | Path = "memory",

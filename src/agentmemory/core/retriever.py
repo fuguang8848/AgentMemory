@@ -1,7 +1,22 @@
-"""Retriever ABC.
+"""Retriever ABC — 多策略检索抽象基类
 
-References:
+本模块定义检索策略的抽象接口。所有具体检索器（如 VectorRetriever、
+BM25Retriever、GraphRetriever 等）需继承 Retriever 并实现对应抽象方法。
+
+架构参考：
     - ARCHITECTURE.md §5.3.8 (Retriever ABC)
+    - LangGraph Checkpointing 模式（状态检查点 → 检索结果合并）
+
+当前状态：框架定义阶段，具体实现尚未接入。
+NotImplementedError 在抽象方法上是合理的设计选择。
+
+Usage:
+    class MyRetriever(Retriever):
+        def add_strategy(self, name: str, strategy: RetrievalStrategy) -> None:
+            ...
+
+        async def retrieve(self, query: SearchQuery) -> list[SearchResult]:
+            ...
 """
 
 from __future__ import annotations
