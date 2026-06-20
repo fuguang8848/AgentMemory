@@ -12,3 +12,67 @@ from __future__ import annotations
 __version__ = "2.0.1"  # 远端版本
 SOURCE_REPO = "https://github.com/YintaTriss/AgentMemory"
 SOURCE_TAG = "v2.0.1"
+
+# ── OTel 可观测性 ────────────────────────────────────────────────────────────
+from agentmemory.extensions.v2.opentelemetry_setup import (
+    setup_tracing,
+    setup_metrics,
+    setup_logging,
+    async_trace,
+)
+
+# ── Dynamic Team Builder ───────────────────────────────────────────────────────
+from agentmemory.extensions.v2.dynamic_team_builder import (
+    TaskDecomposer,
+    DynamicTeamBuilder,
+    TeamOrchestrator,
+    AgentRole,
+    TaskNode,
+    TaskTree,
+    Agent,
+    Conflict,
+    CollaborationResult,
+    OrchestratorConfig,
+    decompose_task,
+    build_team,
+    run_collaboration,
+    run_collaboration_async,
+)
+
+# ── Skill Versioning ───────────────────────────────────────────────────────────
+from agentmemory.extensions.v2.skill_versioning import (
+    SkillVersion,
+    SkillRegistry,
+    SkillHotReload,
+    SkillDiff,
+    skill_diff,
+)
+
+__all__ = [
+    # OTel
+    "setup_tracing",
+    "setup_metrics",
+    "setup_logging",
+    "async_trace",
+    # Dynamic Team Builder
+    "TaskDecomposer",
+    "DynamicTeamBuilder",
+    "TeamOrchestrator",
+    "AgentRole",
+    "TaskNode",
+    "TaskTree",
+    "Agent",
+    "Conflict",
+    "CollaborationResult",
+    "OrchestratorConfig",
+    "decompose_task",
+    "build_team",
+    "run_collaboration",
+    "run_collaboration_async",
+    # Skill Versioning
+    "SkillVersion",
+    "SkillRegistry",
+    "SkillHotReload",
+    "SkillDiff",
+    "skill_diff",
+]
