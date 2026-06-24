@@ -100,6 +100,9 @@ class VectorStore:
         if memory_id in self._entries:
             self._entries[memory_id]["importance"] = float(importance)
             self._entries[memory_id]["updated_at"] = time.time()
+            # Plato's Cave: Update triggers reindex so BM25 index reflects new importance
+            # Without this, the search results are "shadows" not matching actual data
+            self._reindex_dirty = True
             return True
         return False
 

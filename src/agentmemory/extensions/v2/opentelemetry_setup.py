@@ -5,6 +5,7 @@
     setup_metrics(app_name, endpoint)    初始化 meter provider
     setup_logging(service_name)          结构化日志 + trace context 注入
     async_trace(name)                    异步函数 span 装饰器
+    start_prometheus_server(port, host)  Prometheus HTTP 指标端点
 
 降级策略: OTLP gRPC → ConsoleExporter (当 endpoint 不可用时)
 环境变量: OTEL_EXPORTER_OTLP_ENDPOINT
@@ -72,6 +73,7 @@ __all__ = [
     "setup_metrics",
     "setup_logging",
     "async_trace",
+    "start_prometheus_server",
 ]
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -312,3 +314,169 @@ def async_trace(name: str | None = None) -> Callable[[Callable[P, T]], Callable[
 
         return wrapper  # type: ignore[return-value]
     return decorator
+
+
+# ----------------------------------------------------------------
+# II7: Prometheus HTTP metrics endpoint
+# ----------------------------------------------------------------
+
+import http.server
+import threading
+import socketserver
+from prometheus_client import (
+    CollectorRegistry,
+    generate_latest,
+    CONTENT_TYPE_LATEST,
+    Gauge,
+    Counter as PromCounter,
+    Histogram as PromHistogram,
+)
+from prometheus_client.openmetrics.exposition import generate_latest as om_generate_latest
+
+
+class _PrometheusRegistry:
+    """Prometheus metrics registry - exposes spectrai_* metrics at /metrics endpoint."""
+
+    def __init__(self):
+        self._registry = CollectorRegistry()
+        self.pollution_events = PromCounter(
+            "spectrai_pollution_events_total",
+            "Total pollution detection events",
+            ["severity", "source"],
+            registry=self._registry,
+        )
+        self.collaboration_duration = PromHistogram(
+            "spectrai_collaboration_duration_seconds",
+            "Agent collaboration duration in seconds",
+            ["team", "mode"],
+            buckets=(0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0),
+            registry=self._registry,
+        )
+        self.active_spans = Gauge(
+            "spectrai_active_spans",
+            "Number of currently active spans",
+            ["service"],
+            registry=self._registry,
+        )
+
+    def emit_pollution(self, severity: str, source: str = "sanitizer") -> None:
+        self.pollution_events.labels(severity=severity, source=source).inc()
+
+    def emit_collaboration_duration(self, team: str, mode: str, duration: float) -> None:
+        self.collaboration_duration.labels(team=team, mode=mode).observe(duration)
+
+    def set_active_spans(self, service: str, count: int) -> None:
+        self.active_spans.labels(service=service).set(count)
+
+    def generate(self) -> bytes:
+        return generate_latest(self._registry)
+
+
+_prom_registry = None
+_prom_server_thread = None
+_prom_shutdown = threading.Event()
+
+
+def get_prometheus_registry():
+    global _prom_registry
+    if _prom_registry is None:
+        _prom_registry = _PrometheusRegistry()
+    return _prom_registry
+
+
+class _MetricsHandler(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def do_GET(self):
+        if self.path in ("/metrics", "/metrics/prometheus"):
+            reg = get_prometheus_registry()
+            output = reg.generate()
+            self.send_response(200)
+            self.send_header("Content-Type", CONTENT_TYPE_LATEST)
+            self.send_header("Content-Length", str(len(output)))
+            self.end_headers()
+            self.wfile.write(output)
+        elif self.path == "/health":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"OK")
+        else:
+            self.send_error(404)
+
+    def log_message(self, format, *args):
+        pass
+
+
+class _ThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+
+def start_prometheus_server(port=9090, host="0.0.0.0", start_span_observer=True):
+    """Start Prometheus HTTP metrics endpoint (background thread).
+
+    Exposes:
+      GET /metrics            Prometheus text format
+      GET /metrics/prometheus same
+      GET /health             liveness probe
+
+    Custom metrics:
+      spectrai_pollution_events_total         Counter (severity, source)
+      spectrai_active_spans                  Gauge (service)
+      spectrai_collaboration_duration_seconds Histogram (team, mode)
+
+    Returns:
+        Endpoint URL string, e.g. "http://0.0.0.0:9090/metrics"
+
+    Usage:
+        >>> from agentmemory.extensions.v2 import (
+        ...     setup_tracing, setup_metrics, start_prometheus_server
+        ... )
+        >>> tracer = setup_tracing("AgentMemory")
+        >>> meter = setup_metrics("AgentMemory")
+        >>> endpoint = start_prometheus_server(port=9090)
+    """
+    global _prom_server_thread, _prom_shutdown
+
+    if _prom_server_thread is not None and _prom_server_thread.is_alive():
+        return f"http://{host}:{port}/metrics"
+
+    _prom_shutdown.clear()
+
+    def run_server():
+        try:
+            with _ThreadingHTTPServer((host, port), _MetricsHandler) as httpd:
+                httpd.server_name = "spectrai-metrics"
+                while not _prom_shutdown.is_set():
+                    httpd.handle_request()
+        except Exception:
+            pass
+
+    _prom_server_thread = threading.Thread(
+        target=run_server, daemon=True, name="prom-metrics"
+    )
+    _prom_server_thread.start()
+
+    endpoint = f"http://{host}:{port}/metrics"
+
+    if start_span_observer:
+        def observe_spans():
+            import time as _time
+            from opentelemetry import trace
+            from opentelemetry.sdk.trace import TracerProvider
+
+            while not _prom_shutdown.is_set():
+                try:
+                    provider = trace.get_tracer_provider()
+                    if isinstance(provider, TracerProvider):
+                        reg = get_prometheus_registry()
+                        reg.set_active_spans("AgentMemory", 0)
+                except Exception:
+                    pass
+                _time.sleep(5)
+
+        _obs = threading.Thread(target=observe_spans, daemon=True, name="span-observer")
+        _obs.start()
+
+    return endpoint

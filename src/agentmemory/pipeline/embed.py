@@ -23,11 +23,22 @@ class EmbedCache:
     """Simple in-memory embedding cache with TTL.
 
     Cache key: (text_hash, embedder_model) -> vector
+    
+    Plato's Cave Issue: Cache is a "shadow" of real embeddings - if source data changes,
+    cached embeddings become stale shadows. Fixed 7-day TTL without refresh mechanism
+    means stale shadows persist until expiry.
+    
+   芒格工程学 Issue: Unbounded cache growth → memory leak. No cleanup of expired entries
+    except on access (get). Should use max_size + LRU eviction.
     """
 
-    def __init__(self, ttl: int = _CACHE_TTL_SECONDS):
+    # 芒格工程学: Safety margin - max cache size to prevent memory exhaustion
+    _MAX_CACHE_SIZE = 10000
+
+    def __init__(self, ttl: int = _CACHE_TTL_SECONDS, max_size: int = _MAX_CACHE_SIZE):
         self._cache: dict[str, tuple[list[float], float]] = {}  # key -> (vector, expiry)
         self._ttl = ttl
+        self._max_size = max_size
         self._lock = asyncio.Lock()
 
     def _make_key(self, text: str, model: str) -> str:
@@ -47,11 +58,37 @@ class EmbedCache:
             return vector
 
     async def set(self, text: str, model: str, vector: list[float]) -> None:
-        """Cache an embedding with TTL."""
+        """Cache an embedding with TTL.
+        
+        芒格工程学 Fix: Evict oldest entries when cache is full (近似LRU).
+        This prevents unbounded memory growth (memory leak).
+        """
         key = self._make_key(text, model)
         expiry = time.time() + self._ttl
         async with self._lock:
+            # 芒格工程学: If cache full, evict ~20% oldest entries to make space
+            if len(self._cache) >= self._max_size:
+                self._evict_oldest(int(self._max_size * 0.2))
             self._cache[key] = (vector, expiry)
+    
+    def _evict_oldest(self, count: int) -> None:
+        """Evict oldest 'count' entries from cache (approximate LRU)."""
+        if not self._cache:
+            return
+        # Sort by expiry (oldest first) and remove
+        sorted_keys = sorted(self._cache.keys(), key=lambda k: self._cache[k][1])
+        for key in sorted_keys[:count]:
+            del self._cache[key]
+    
+    async def clear(self) -> None:
+        """Clear all cache entries."""
+        async with self._lock:
+            self._cache.clear()
+    
+    async def size(self) -> int:
+        """Return current cache size."""
+        async with self._lock:
+            return len(self._cache)
 
     async def get_batch(
         self, texts: list[str], model: str

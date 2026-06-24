@@ -152,11 +152,11 @@ class MiniMaxClient:
 
 [创新点] 首次将"协作学习"引入AI Agent的睡眠阶段""",
 
-            "counterfactual": """[关键分支点] 当时如果选择了MiniMax M3而非Ollama，上下文污染问题是否会不同？
+            "counterfactual": """[关键分支点] 当时如果选择了MiniMax M3而非Ollama，当前架构会有何不同？
 
-[推理] M3的buildReplayPolicy接口可能提供更好的thinking通道控制，相比Ollama的无差别传递，理论上可以更早阻断修真内容。
+[推理] M3的原生function calling和structured output能力相比Ollama更结构化，理论上可以减少工具调用的解析不确定性。
 
-[建议] 评估在VCPToolBox中增加模型切换策略——当检测到修真污染时，自动切换到有buildReplayPolicy的模型""",
+[建议] VCPToolBox可评估M3的原生工具协议，对比Ollama的工具兼容层，在工具调用密集场景做基准测试""",
 
             "cross_domain": """[核心原理] 遗忘曲线（Ebbinghaus）的核心不是"记忆衰退"，而是"选择性强化"——大脑主动保留高价值记忆，淘汰低价值记忆。
 
